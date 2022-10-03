@@ -1,0 +1,83 @@
+# Ansible playbook for deploying a Flask app
+
+---
+# Install system apt packages
+- hosts: webservers
+  #connection: local
+  become: yes
+  become_user: root
+  tasks:
+  - name: update cache
+    apt: update_cache=yes force_apt_get=yes cache_valid_time=43200
+  - name: install packages
+    ansible.builtin.apt:
+      pkg:
+      - tree         
+      - python3-pip
+      - python3-dev
+      - nginx
+      - virtualenv
+
+# Install the app, note: don't do these tasks with become sudo
+- hosts: webservers
+  #connection: local
+  become: yes 
+  become_user: root
+  tasks:
+  - name: clone repo
+    git:
+      repo: 'https://github.com/cobreaker/Flask-app.git'
+      dest: /home/ubuntu/Flask-web
+      update: yes  # Does a git pull if the repo already exists
+  - name: install modules in a virtualenv
+    pip:
+      requirements: /home/ubuntu/Flask-web/requirements.txt
+      virtualenv: /home/ubuntu/Flask-web/env
+      virtualenv_python: python3
+
+# Configure app systemd service and nginx
+- hosts: webservers
+  #connection: local
+  become: yes
+  become_user: root
+  tasks:
+  - name: template systemd service config
+    copy:
+      src: .service
+      dest: /etc/systemd/system/Flask-web.service
+  - name: start systemd app service
+    systemd: name=Flask-web.service state=restarted enabled=yes
+  - name: template nginx site config
+    template:
+      src: .nginx
+      dest: /etc/nginx/sites-available/Flask-web
+  - name: remove default nginx site config
+    file: path=/etc/nginx/sites-enabled/default state=absent
+  # - command: mv /etc/nginx/sites-enabled/default /tmp/nginx.sites-enabled.default
+  - name: enable nginx site
+    file:
+      src: /etc/nginx/sites-available/Flask-web
+      dest: /etc/nginx/sites-enabled/default
+      state: link
+      force: yes
+  - name: restart nginx
+    systemd: name=nginx state=restarted enabled=yes
+  - name: open firewall for nginx
+    ufw:
+      rule: allow
+      name: Nginx Full
+
+# Run a quick test to verify the site is working
+- hosts: webservers
+  #connection: local
+  tasks:
+  - name: get url
+    get_url:
+      url: http://127.0.0.1:5000
+      dest: /tmp/index.html
+  - name: read html
+    shell: cat /tmp/index.html
+    register: html_contents
+  - name: check for string in html
+    when: html_contents.stdout.find('hello') != -1
+    debug: msg="success!"
